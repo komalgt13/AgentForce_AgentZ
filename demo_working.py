@@ -16,11 +16,12 @@ from dotenv import load_dotenv
 # Load environment
 load_dotenv()
 
-# Set environment variables directly to avoid issues
-os.environ['LLM_PROVIDER'] = 'huggingface'
-os.environ['LLM_MODEL'] = 'microsoft/DialoGPT-small'
+# Set environment variables for Gemini
+os.environ['GEMINI_MODEL'] = 'gemini-1.5-flash'
 
-from open_source_llm import OpenSourceLLMManager
+# Import Gemini LLM Manager
+from open_source_llm import GeminiLLMManager
+from agentic_persona_generator import AgenticPersonaGenerator
 
 # Configure logging
 logging.basicConfig(level=logging.WARNING)  # Reduce noise
@@ -63,48 +64,103 @@ Customer Data Analysis:
 """
     
     # Ask AI to identify patterns
-    prompt = f"""Based on this customer data, identify 3 key customer segments and describe each one:
+    prompt = f"""## CUSTOMER SEGMENTATION ANALYSIS REQUEST
 
+**Objective**: Identify and profile 3 distinct customer segments for targeted marketing
+
+**Dataset Summary**:
 {summary}
 
-Provide a brief analysis of 3 distinct customer personas based on this data. For each persona, include:
-1. A descriptive name
-2. Key characteristics
-3. Main behaviors
-4. Pain points
+**Required Analysis**:
 
-Keep each persona description to 2-3 sentences."""
+### Segment Identification
+Analyze the data patterns to identify 3 distinct customer groups based on:
+- Purchasing behavior and frequency
+- Demographic characteristics (age, location)
+- Satisfaction levels and spending patterns
+- Annual spend ranges and value potential
+
+### Persona Development
+For each of the 3 customer segments, provide:
+
+**1. Segment Identity**
+- Descriptive name that captures the essence of this group
+- Primary distinguishing characteristics
+- Estimated segment size/percentage
+
+**2. Customer Profile**
+- Key demographic features (age ranges, typical locations)
+- Behavioral patterns (purchase frequency, spending habits)
+- Satisfaction levels and expectations
+
+**3. Business Insights**
+- Primary pain points and challenges
+- Value drivers and motivations
+- Revenue potential and lifetime value indicators
+
+**Output Format**: 
+Structure each persona with clear headers and bullet points. Keep descriptions concise but specific (2-3 sentences per section)."""
     
     try:
-        response = llm(prompt)
-        return response
+        response = llm.invoke(prompt)
+        # Handle both string responses and response objects
+        if hasattr(response, 'content'):
+            return response.content
+        else:
+            return str(response)
     except Exception as e:
         return f"Analysis completed with basic patterns. Error details: {str(e)}"
 
 def generate_marketing_strategies(personas_text, llm):
     """Generate marketing strategies for the personas"""
     
-    prompt = f"""Based on these customer personas, suggest specific marketing strategies:
+    prompt = f"""## MARKETING STRATEGY DEVELOPMENT REQUEST
 
+**Objective**: Create actionable marketing strategies for each customer persona
+
+**Customer Personas**:
 {personas_text}
 
-For each persona, provide:
-1. Best marketing channels
-2. Key messaging themes  
-3. Campaign ideas
+**Strategy Requirements**:
 
-Keep suggestions practical and brief."""
+For each persona, develop specific recommendations covering:
+
+### 1. Channel Strategy
+- **Primary Channels**: Most effective marketing channels for reaching this segment
+- **Secondary Channels**: Supporting touchpoints for reinforcement
+- **Channel Rationale**: Why these channels work best for this persona
+
+### 2. Messaging & Communication
+- **Core Messages**: Key value propositions that resonate
+- **Communication Tone**: Formal/casual, technical/simple, emotional/rational
+- **Content Types**: Formats that engage (email, social, video, etc.)
+
+### 3. Campaign Concepts
+- **Acquisition Tactics**: Strategies to attract new customers
+- **Retention Approaches**: Methods to maintain loyalty and engagement
+- **Seasonal Opportunities**: Time-based campaign ideas
+
+### 4. Success Metrics
+- **Primary KPIs**: Key performance indicators to track
+- **Success Benchmarks**: Realistic targets for campaign performance
+
+**Output Format**: 
+Organize by persona with clear headers. Focus on practical, implementable strategies with specific recommendations."""
     
     try:
-        response = llm(prompt)
-        return response
+        response = llm.invoke(prompt)
+        # Handle both string responses and response objects
+        if hasattr(response, 'content'):
+            return response.content
+        else:
+            return str(response)
     except Exception as e:
         return f"Marketing strategy suggestions generated. Error details: {str(e)}"
 
 async def run_simple_demo():
-    """Run a simplified demo showing AI persona generation"""
+    """Run the full LangChain agentic pipeline demo"""
     
-    print("AI Persona Generator - Simple Demo")
+    print("AI Persona Generator - LangChain Agentic Demo")
     print("=" * 50)
     
     try:
@@ -117,63 +173,146 @@ async def run_simple_demo():
         print("\nCustomer Data Sample:")
         print(data.head(3).to_string(index=False))
         
-        # 2. Initialize AI system
-        print("\nInitializing AI system...")
-        llm_manager = OpenSourceLLMManager()
-        llm = llm_manager.get_llm(
-            model_name="microsoft/DialoGPT-small",
-            provider="huggingface",
-            max_tokens=300  # Keep responses shorter
-        )
-        print("AI system ready!")
+        # 2. Initialize LangChain Agentic System
+        print("\nInitializing LangChain Agentic System...")
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY not found in environment")
         
-        # 3. AI Data Analysis
+        # Initialize the full agentic persona generator
+        generator = AgenticPersonaGenerator(api_key=api_key)
+        print("✅ LangChain Agentic System ready with 6 specialized agents!")
+        
+        # Save data to CSV for the generator
+        temp_csv = "temp_demo_data.csv"
+        data.to_csv(temp_csv, index=False)
+        
+        # 3. Run REAL LangChain Agentic Pipeline (Using Actual Agents!)
+        print("\n🤖 Running REAL LangChain Agentic Analysis Pipeline...")
+        
+        # Use the actual agentic persona generator with its full pipeline
+        print("   🚀 Invoking full 6-agent LangChain system...")
+        results = generator.generate_personas_from_csv(temp_csv)
+        
+        # The results come from the actual agentic system with real agents
+        print("   ✅ LangChain agents completed analysis!")
+        
+        # Clean up temp file
+        if os.path.exists(temp_csv):
+            os.remove(temp_csv)
+        
+        # 4. Display Results from Real Agentic System
+        
+        # 4. Display Results from Real Agentic System
+        print("\n" + "="*50)
+        print("REAL LANGCHAIN AGENTIC PERSONAS & STRATEGIES")
+        print("="*50)
+        
+        if results and 'detailed_personas' in results:
+            personas_dict = results['detailed_personas']
+            print(f"\n✅ Generated {len(personas_dict)} detailed personas from REAL LangChain agents:")
+            for i, (key, persona) in enumerate(personas_dict.items(), 1):
+                name = persona.get('name', f'Persona {i}')
+                print(f"\n--- PERSONA {i}: {name} ---")
+                
+                # Show key persona details
+                if 'demographics' in persona:
+                    print(f"Demographics: {persona['demographics']}")
+                if 'behavior_patterns' in persona:
+                    print(f"Behavior: {persona['behavior_patterns']}")
+                if 'pain_points' in persona:
+                    print(f"Pain Points: {persona['pain_points']}")
+                if 'marketing_strategy' in persona:
+                    strategy = str(persona['marketing_strategy'])
+                    if len(strategy) > 200:
+                        print(f"Marketing Strategy: {strategy[:200]}...")
+                    else:
+                        print(f"Marketing Strategy: {strategy}")
+        
+        if results and 'marketing_insights' in results:
+            print(f"\n✅ Generated comprehensive marketing insights from agents")
+            
+        if results and 'agent_analysis' in results:
+            print(f"\n📊 Agent Analysis Summary:")
+            analysis = results['agent_analysis']
+            for agent_name, agent_data in analysis.items():
+                if isinstance(agent_data, str):
+                    print(f"- {agent_name}: {len(agent_data)} chars of analysis")
+                elif isinstance(agent_data, dict) and 'insights' in agent_data:
+                    print(f"- {agent_name}: {len(agent_data['insights'])} chars of insights")
+        
+        print("\n" + "="*50)
+        print("REAL LANGCHAIN AGENTIC DEMO COMPLETED!")
+        print("INFO: This demonstrates the ACTUAL 6-agent LangChain system")
+        print("NOTE: Uses real LangChain agents with tools and specialized workflows")
+        
+        # Save results to file
+        print("\nSaving REAL agentic results to file...")
+        results_file = f"real_agentic_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(results_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, default=str, ensure_ascii=False)
+        
+        print(f"Results saved to: {results_file}")
+        print(f"Location: {os.path.abspath(results_file)}")
+        
+        return results
+        
+    except Exception as e:
+        print(f"\n❌ LangChain Agentic Demo failed: {str(e)}")
+        print("This might be due to:")
+        print("1. Missing GOOGLE_API_KEY in .env file")
+        print("2. API rate limits") 
+        print("3. Network connectivity issues")
+        print("\n🔄 Falling back to simple LLM demo...")
+        
+        # Fallback to simple demo
+        return await run_simple_llm_demo()
+
+async def run_simple_llm_demo():
+    """Fallback demo using direct LLM calls"""
+    print("\n" + "="*30)
+    print("SIMPLE LLM DEMO (Fallback)")
+    print("="*30)
+    
+    try:
+        # Create sample data
+        data = create_sample_data()
+        
+        # Initialize simple LLM (use direct API for simple demo)
+        llm_manager = GeminiLLMManager()
+        llm = llm_manager.get_llm(
+            model_name="gemini-1.5-flash",
+            temperature=0.3,
+            max_tokens=1000,
+            use_langchain=False  # Use direct API for simple demo
+        )
+        
+        # Simple AI analysis
         print("\nAI analyzing customer patterns...")
         personas_analysis = analyze_data_with_ai(data, llm)
         
-        print("\n" + "="*50)
-        print("AI-GENERATED CUSTOMER PERSONAS")
-        print("="*50)
+        print("\n" + "="*40)
+        print("SIMPLE AI-GENERATED PERSONAS")
+        print("="*40)
         print(personas_analysis)
         
-        # 4. Marketing Strategies
-        print("\nGenerating marketing strategies...")
-        marketing_strategies = generate_marketing_strategies(personas_analysis, llm)
-        
-        print("\n" + "="*50)
-        print("AI-GENERATED MARKETING STRATEGIES")
-        print("="*50)
-        print(marketing_strategies)
-        
-        print("\n" + "="*50)
-        print("Demo completed successfully!")
-        print("INFO: This demonstrates the core AI persona generation capability")
-        print("NOTE: The full system uses 6 specialized agents for deeper analysis")
-        
-        # Save results to file
-        print("\nSaving results to file...")
+        # Save simple results
         results = {
             "timestamp": datetime.now().isoformat(),
-            "model_used": "microsoft/DialoGPT-small",
-            "customer_data_summary": {
-                "total_customers": len(data),
-                "columns": list(data.columns)
-            },
-            "ai_generated_personas": personas_analysis,
-            "marketing_strategies": marketing_strategies
+            "demo_type": "simple_llm_fallback",
+            "customer_data_size": len(data),
+            "personas_analysis": personas_analysis
         }
         
-        output_filename = "persona_results.json"
-        with open(output_filename, 'w', encoding='utf-8') as f:
+        with open("simple_persona_results.json", "w", encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         
-        print(f"Results saved to: {output_filename}")
-        print(f"Location: {os.path.abspath(output_filename)}")
+        print("\nSimple results saved to: simple_persona_results.json")
+        return results
         
     except Exception as e:
-        print(f"Demo error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\n❌ Simple demo also failed: {str(e)}")
+        return None
 
 if __name__ == "__main__":
     asyncio.run(run_simple_demo())

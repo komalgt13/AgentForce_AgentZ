@@ -1,31 +1,20 @@
 """
-Open Source LLM Integration for Agentic Persona Generator
-Supports multiple open source LLM providers: Ollama, HuggingFace, LocalAI
+Gemini LLM Integration for Agentic Persona Generator
+Uses Google's Gemini 2.5-flash model via LangChain
 """
 
 import os
 import logging
 from typing import Optional, Dict, Any, List
-from abc import ABC, abstractmethod
 
-# LangChain imports for open source models
-from langchain.llms.base import LLM
-from langchain_community.llms import Ollama, HuggingFacePipeline
-from langchain_community.embeddings import OllamaEmbeddings, HuggingFaceEmbeddings
-from langchain.callbacks.manager import CallbackManagerForLLMRun
-from langchain.schema import BaseMessage
+# LangChain imports for Gemini
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.schema.embeddings import Embeddings
-
-# HuggingFace and Transformers
-try:
-    from transformers import (
-        AutoTokenizer, AutoModelForCausalLM, 
-        pipeline, BitsAndBytesConfig
-    )
-    import torch
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
+from langchain.schema import BaseMessage, HumanMessage, AIMessage
+from langchain_core.language_models.base import BaseLanguageModel
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain.callbacks.manager import CallbackManagerForLLMRun
+from langchain.schema import Generation, LLMResult
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -33,359 +22,260 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-class OpenSourceLLMProvider(ABC):
-    """Abstract base class for open source LLM providers"""
+class LangChainCompatibleGeminiWrapper(BaseLanguageModel):
+    """
+    LangChain-compatible wrapper around DirectGeminiWrapper
+    This allows us to use the working DirectGeminiWrapper with LangChain agents
+    """
     
-    @abstractmethod
-    def get_llm(self, model_name: str, **kwargs) -> LLM:
-        """Get LLM instance"""
-        pass
-    
-    @abstractmethod
-    def get_embeddings(self, model_name: str, **kwargs) -> Embeddings:
-        """Get embeddings instance"""
-        pass
-    
-    @abstractmethod
-    def is_available(self) -> bool:
-        """Check if provider is available"""
-        pass
-
-class OllamaProvider(OpenSourceLLMProvider):
-    """Ollama LLM Provider - runs models locally"""
-    
-    def __init__(self, base_url: str = "http://localhost:11434"):
-        self.base_url = base_url
-    
-    def get_llm(self, model_name: str, **kwargs) -> LLM:
-        """Get Ollama LLM instance"""
-        return Ollama(
-            base_url=self.base_url,
-            model=model_name,
-            temperature=kwargs.get('temperature', 0.3),
-            top_p=kwargs.get('top_p', 0.9),
-            num_predict=kwargs.get('max_tokens', 2048),
-            verbose=kwargs.get('verbose', False)
-        )
-    
-    def get_embeddings(self, model_name: str = "nomic-embed-text", **kwargs) -> Embeddings:
-        """Get Ollama embeddings instance"""
-        return OllamaEmbeddings(
-            base_url=self.base_url,
-            model=model_name
-        )
-    
-    def is_available(self) -> bool:
-        """Check if Ollama is available"""
-        try:
-            import requests
-            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
-            return response.status_code == 200
-        except Exception:
-            return False
-
-class HuggingFaceProvider(OpenSourceLLMProvider):
-    """HuggingFace LLM Provider - supports both local and API models"""
-    
-    def __init__(self, use_api: bool = False, api_token: Optional[str] = None):
-        self.use_api = use_api
-        self.api_token = api_token or os.getenv('HUGGINGFACE_API_TOKEN')
-        self.device = "cuda" if torch.cuda.is_available() and os.getenv('USE_GPU', 'true').lower() == 'true' else "cpu"
-    
-    def get_llm(self, model_name: str, **kwargs) -> LLM:
-        """Get HuggingFace LLM instance optimized for Mistral 7B"""
-        if not TRANSFORMERS_AVAILABLE:
-            raise ImportError("transformers library not available. Install with: pip install transformers torch")
+    def __init__(self, direct_wrapper):
+        super().__init__()
+        self.direct_wrapper = direct_wrapper
         
-        # Special handling for Mistral models
-        if "mistral" in model_name.lower():
-            logger.info(f"Optimizing for Mistral model: {model_name}")
-            
-        # Quantization config for efficient memory usage
-        quantization_config = None
-        if self.device == "cuda" and os.getenv('MODEL_QUANTIZATION', '4bit') == '4bit':
+    def _generate(self, prompts: List[str], stop: Optional[List[str]] = None, 
+                  run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> LLMResult:
+        """Generate responses for given prompts"""
+        generations = []
+        for prompt in prompts:
             try:
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,  # Better for Mistral
-                )
-                logger.info("Using 4-bit quantization for efficient memory usage")
+                response = self.direct_wrapper.invoke(prompt)
+                generation = Generation(text=response.content)
+                generations.append([generation])
             except Exception as e:
-                logger.warning(f"4-bit quantization not available: {e}")
+                logger.error(f"Error generating response: {e}")
+                generation = Generation(text=f"Error: {str(e)}")
+                generations.append([generation])
         
-        # Load model and tokenizer
-        try:
-            logger.info(f"Loading tokenizer for {model_name}...")
-            tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-            
-            # Ensure proper padding token (important for Mistral)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-                tokenizer.pad_token_id = tokenizer.eos_token_id
-            
-            logger.info(f"Loading model {model_name}...")
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                quantization_config=quantization_config,
-                device_map="auto" if self.device == "cuda" else None,
-                trust_remote_code=True,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                low_cpu_mem_usage=True,  # Important for large models like Mistral 7B
-                attn_implementation="flash_attention_2" if self.device == "cuda" else None,  # Optimize attention
-            )
-            
-            # Pipeline parameters optimized for Mistral
-            pipeline_kwargs = {
-                'max_new_tokens': kwargs.get('max_tokens', 2048),
-                'temperature': kwargs.get('temperature', 0.3),
-                'top_p': kwargs.get('top_p', 0.9),
-                'do_sample': kwargs.get('do_sample', True),
-                'repetition_penalty': 1.1,  # Reduce repetitions
-                'return_full_text': False,  # Only return generated text
-                'pad_token_id': tokenizer.eos_token_id,
-            }
-            
-            # Create pipeline
-            logger.info("Creating text generation pipeline...")
-            pipe = pipeline(
-                "text-generation",
-                model=model,
-                tokenizer=tokenizer,
-                **pipeline_kwargs
-            )
-            
-            return HuggingFacePipeline(pipeline=pipe)
-            
-        except Exception as e:
-            logger.error(f"Failed to load HuggingFace model {model_name}: {e}")
-            logger.info("Attempting fallback model...")
-            # Fallback to a smaller model
-            return self._get_fallback_model(**kwargs)
+        return LLMResult(generations=generations)
     
-    def _get_fallback_model(self, **kwargs) -> LLM:
-        """Get a smaller fallback model"""
+    def _llm_type(self) -> str:
+        return "gemini_direct_wrapper"
+    
+    def invoke(self, prompt, **kwargs):
+        """Direct invocation method for compatibility"""
+        return self.direct_wrapper.invoke(prompt)
+
+class DirectGeminiWrapper:
+    """
+    Simple Direct Gemini API wrapper for basic LLM operations
+    Used as fallback when LangChain integration has issues
+    """
+    
+    def __init__(self, api_key: str, model_name: str, temperature: float, max_tokens: int):
+        import google.generativeai as genai
+        self.api_key = api_key
+        self.model_name = model_name
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        
+        genai.configure(api_key=api_key)
+        
+        # Configure generation parameters
+        generation_config = genai.types.GenerationConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+        
+        self.model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config=generation_config
+        )
+    
+    def invoke(self, prompt):
+        """Invoke the model with a prompt"""
         try:
-            fallback_model = "microsoft/DialoGPT-small"
-            logger.info(f"Loading fallback model: {fallback_model}")
+            if isinstance(prompt, list):
+                # Handle list of messages (LangChain format)
+                content = prompt[0].content if hasattr(prompt[0], 'content') else str(prompt[0])
+            else:
+                content = prompt if isinstance(prompt, str) else str(prompt)
             
-            tokenizer = AutoTokenizer.from_pretrained(fallback_model)
-            model = AutoModelForCausalLM.from_pretrained(fallback_model)
+            response = self.model.generate_content(content)
             
-            pipe = pipeline(
-                "text-generation",
-                model=model,
-                tokenizer=tokenizer,
-                max_new_tokens=kwargs.get('max_tokens', 512),  # Smaller for fallback
-                temperature=kwargs.get('temperature', 0.7),
-                do_sample=True
-            )
+            # Create a response object that mimics LangChain
+            class Response:
+                def __init__(self, content):
+                    self.content = content
+                    
+                def __str__(self):
+                    return self.content
             
-            return HuggingFacePipeline(pipeline=pipe)
+            return Response(response.text)
             
         except Exception as e:
-            logger.error(f"Fallback model also failed: {e}")
+            logger.error(f"Direct Gemini API call failed: {str(e)}")
             raise
     
-    def get_embeddings(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", **kwargs) -> Embeddings:
-        """Get HuggingFace embeddings instance"""
-        return HuggingFaceEmbeddings(
-            model_name=model_name,
-            model_kwargs={'device': self.device},
-            encode_kwargs={'normalize_embeddings': True}
-        )
+    def __call__(self, prompt):
+        """Support old-style calling"""
+        return self.invoke(prompt)
+
+class GeminiLLMManager:
+    """
+    Gemini LLM Manager for Google Generative AI
+    Handles Gemini 2.5-flash model integration
+    """
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Gemini LLM Manager"""
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError("Google API key is required. Set GOOGLE_API_KEY environment variable.")
+        
+        # Set the API key in environment
+        os.environ["GOOGLE_API_KEY"] = self.api_key
+        
+        self.available_models = {
+            "gemini-1.5-flash": "gemini-1.5-flash",
+            "gemini-1.5-pro": "gemini-1.5-pro",
+            "gemini-2.5-flash": "gemini-1.5-flash"  # Map to available model
+        }
+        
+        logger.info(f"Initialized Gemini LLM Manager with API key")
+    
+    def get_llm(self, 
+                model_name: str = "gemini-1.5-flash",
+                temperature: float = 0.3,
+                max_tokens: int = 2048,
+                use_langchain: bool = True,
+                **kwargs):
+        """
+        Get Gemini LLM instance
+        
+        Args:
+            model_name: Model name (default: gemini-1.5-flash)
+            temperature: Generation temperature (0.0 to 1.0)
+            max_tokens: Maximum tokens to generate
+            use_langchain: Whether to use LangChain integration (default: True)
+            **kwargs: Additional model parameters
+        
+        Returns:
+            ChatGoogleGenerativeAI instance or DirectGeminiWrapper
+        """
+        try:
+            # Use stable models that are available
+            stable_models = {
+                "gemini-2.5-flash": "gemini-1.5-flash",  # Map to available model
+                "gemini-1.5-pro": "gemini-1.5-pro",
+                "gemini-1.5-flash": "gemini-1.5-flash"
+            }
+            
+            # Map model name if needed
+            full_model_name = stable_models.get(model_name, "gemini-1.5-flash")
+            
+            if use_langchain:
+                try:
+                    # Try LangChain ChatGoogleGenerativeAI first
+                    llm = ChatGoogleGenerativeAI(
+                        model=full_model_name,
+                        temperature=temperature,
+                        max_output_tokens=max_tokens,
+                        google_api_key=self.api_key
+                    )
+                    logger.info(f"Created LangChain Gemini LLM: {full_model_name}")
+                    return llm
+                except Exception as langchain_error:
+                    logger.warning(f"LangChain integration failed: {str(langchain_error)}")
+                    logger.info("Creating LangChain-compatible wrapper around DirectGeminiWrapper")
+                    
+                    # Create DirectGeminiWrapper and wrap it for LangChain compatibility
+                    direct_wrapper = DirectGeminiWrapper(self.api_key, full_model_name, temperature, max_tokens)
+                    return LangChainCompatibleGeminiWrapper(direct_wrapper)
+            
+            # Use direct API wrapper for non-LangChain usage
+            logger.info(f"Using Direct Gemini API for model: {full_model_name}")
+            return DirectGeminiWrapper(self.api_key, full_model_name, temperature, max_tokens)
+            
+        except Exception as e:
+            logger.error(f"Failed to create Gemini LLM: {str(e)}")
+            raise
+    
+    def get_embeddings(self, 
+                      model_name: str = "models/embedding-001",
+                      **kwargs) -> GoogleGenerativeAIEmbeddings:
+        """
+        Get Gemini embeddings instance
+        
+        Args:
+            model_name: Embedding model name
+            **kwargs: Additional parameters
+        
+        Returns:
+            GoogleGenerativeAIEmbeddings instance
+        """
+        try:
+            embeddings = GoogleGenerativeAIEmbeddings(
+                model=model_name,
+                google_api_key=self.api_key,
+                **kwargs
+            )
+            
+            logger.info(f"Created Gemini embeddings: {model_name}")
+            return embeddings
+            
+        except Exception as e:
+            logger.error(f"Failed to create Gemini embeddings: {str(e)}")
+            raise
     
     def is_available(self) -> bool:
-        """Check if HuggingFace is available"""
-        return TRANSFORMERS_AVAILABLE
-
-class OpenSourceLLMManager:
-    """Manager class for open source LLM providers"""
-    
-    def __init__(self):
-        self.providers = {
-            'ollama': OllamaProvider(base_url=os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')),
-            'huggingface': HuggingFaceProvider(),
-            'hf': HuggingFaceProvider()  # Alias
-        }
-        
-        # Default configurations for different models
-        self.model_configs = {
-            # Ollama models
-            'llama3.2:3b': {'temperature': 0.3, 'max_tokens': 2048, 'provider': 'ollama'},
-            'llama3.2:7b': {'temperature': 0.3, 'max_tokens': 2048, 'provider': 'ollama'},
-            'mistral:7b': {'temperature': 0.3, 'max_tokens': 2048, 'provider': 'ollama'},
-            'codellama:7b': {'temperature': 0.2, 'max_tokens': 2048, 'provider': 'ollama'},
-            
-            # HuggingFace models
-            'microsoft/DialoGPT-medium': {'temperature': 0.7, 'max_tokens': 1024, 'provider': 'huggingface'},
-            'microsoft/DialoGPT-small': {'temperature': 0.7, 'max_tokens': 512, 'provider': 'huggingface'},
-            'distilgpt2': {'temperature': 0.5, 'max_tokens': 512, 'provider': 'huggingface'},
-            'gpt2': {'temperature': 0.5, 'max_tokens': 1024, 'provider': 'huggingface'},
-        }
-    
-    def get_llm(self, model_name: str = None, provider: str = None, **kwargs) -> LLM:
-        """Get LLM instance with automatic provider detection"""
-        
-        # Use environment defaults if not specified
-        if not model_name:
-            model_name = os.getenv('LLM_MODEL', 'llama3.2:3b')
-        
-        if not provider:
-            provider = os.getenv('LLM_PROVIDER', 'ollama')
-        
-        # Get model config if available
-        config = self.model_configs.get(model_name, {})
-        if 'provider' in config and not provider:
-            provider = config['provider']
-        
-        # Merge config with kwargs
-        final_kwargs = {**config, **kwargs}
-        final_kwargs.pop('provider', None)  # Remove provider from kwargs
-        
-        # Get provider instance
-        if provider not in self.providers:
-            raise ValueError(f"Unsupported provider: {provider}. Available: {list(self.providers.keys())}")
-        
-        provider_instance = self.providers[provider]
-        
-        # Check availability
-        if not provider_instance.is_available():
-            logger.warning(f"Provider {provider} not available, trying fallbacks...")
-            return self._get_fallback_llm(model_name, **final_kwargs)
-        
+        """Check if Gemini API is available"""
         try:
-            return provider_instance.get_llm(model_name, **final_kwargs)
+            # Test with a simple request
+            llm = self.get_llm()
+            test_response = llm.invoke("Hello")
+            return True
         except Exception as e:
-            logger.error(f"Failed to initialize {provider} with model {model_name}: {e}")
-            return self._get_fallback_llm(model_name, **final_kwargs)
-    
-    def get_embeddings(self, model_name: str = None, provider: str = None, **kwargs) -> Embeddings:
-        """Get embeddings instance"""
-        
-        if not model_name:
-            model_name = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')
-        
-        if not provider:
-            provider = os.getenv('EMBEDDING_PROVIDER', 'huggingface')
-        
-        provider_instance = self.providers.get(provider)
-        if not provider_instance:
-            # Fallback to HuggingFace for embeddings
-            provider_instance = self.providers['huggingface']
-        
-        return provider_instance.get_embeddings(model_name, **kwargs)
-    
-    def _get_fallback_llm(self, original_model: str, **kwargs) -> LLM:
-        """Get fallback LLM when primary fails"""
-        fallback_options = [
-            ('ollama', 'llama3.2:3b'),
-            ('huggingface', 'microsoft/DialoGPT-small'),
-            ('huggingface', 'distilgpt2')
-        ]
-        
-        for provider, model in fallback_options:
-            try:
-                provider_instance = self.providers[provider]
-                if provider_instance.is_available():
-                    logger.info(f"Using fallback: {provider} with {model}")
-                    return provider_instance.get_llm(model, **kwargs)
-            except Exception as e:
-                logger.warning(f"Fallback {provider}/{model} failed: {e}")
-                continue
-        
-        raise RuntimeError("No working LLM provider found")
-    
-    def list_available_models(self) -> Dict[str, List[str]]:
-        """List available models for each provider"""
-        available = {}
-        
-        for provider_name, provider in self.providers.items():
-            if provider.is_available():
-                if provider_name == 'ollama':
-                    # Get Ollama models
-                    try:
-                        import requests
-                        response = requests.get(f"{provider.base_url}/api/tags")
-                        if response.status_code == 200:
-                            models = [model['name'] for model in response.json().get('models', [])]
-                            available[provider_name] = models
-                    except:
-                        available[provider_name] = ['llama3.2:3b', 'mistral:7b']  # Common defaults
-                
-                elif provider_name == 'huggingface':
-                    # Common HF models
-                    available[provider_name] = [
-                        'microsoft/DialoGPT-medium',
-                        'microsoft/DialoGPT-small', 
-                        'distilgpt2',
-                        'gpt2'
-                    ]
-        
-        return available
-    
-    def test_model(self, model_name: str, provider: str = None) -> bool:
-        """Test if a model works"""
-        try:
-            llm = self.get_llm(model_name, provider)
-            # Test with a simple prompt
-            response = llm("Hello, world!")
-            return len(response.strip()) > 0
-        except Exception as e:
-            logger.error(f"Model test failed for {model_name}: {e}")
+            logger.warning(f"Gemini API not available: {str(e)}")
             return False
-
-# Convenience functions
-def get_open_source_llm(model_name: str = None, provider: str = None, **kwargs) -> LLM:
-    """Get an open source LLM instance"""
-    manager = OpenSourceLLMManager()
-    return manager.get_llm(model_name, provider, **kwargs)
-
-def get_open_source_embeddings(model_name: str = None, provider: str = None, **kwargs) -> Embeddings:
-    """Get an open source embeddings instance"""
-    manager = OpenSourceLLMManager()
-    return manager.get_embeddings(model_name, provider, **kwargs)
-
-def list_available_models() -> Dict[str, List[str]]:
-    """List all available open source models"""
-    manager = OpenSourceLLMManager()
-    return manager.list_available_models()
-
-# Example usage and testing
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     
-    print("🤖 Open Source LLM Integration Test")
-    print("=" * 50)
+    def list_available_models(self) -> List[str]:
+        """List available Gemini models"""
+        return list(self.available_models.keys())
     
-    manager = OpenSourceLLMManager()
-    
-    # List available models
-    print("\n📋 Available Models:")
-    available = manager.list_available_models()
-    for provider, models in available.items():
-        print(f"  {provider}: {models}")
-    
-    # Test model loading
-    print(f"\n🔧 Testing Model Loading...")
-    
-    test_models = [
-        ('ollama', 'llama3.2:3b'),
-        ('huggingface', 'microsoft/DialoGPT-small')
-    ]
-    
-    for provider, model in test_models:
-        print(f"\n  Testing {provider}/{model}...")
+    def test_connection(self) -> Dict[str, Any]:
+        """Test connection to Gemini API using direct API"""
         try:
-            llm = manager.get_llm(model, provider, temperature=0.5, max_tokens=100)
-            print(f"  ✅ {provider}/{model} loaded successfully")
+            import google.generativeai as genai
             
-            # Test inference
-            response = llm("What is artificial intelligence?")
-            print(f"  📝 Response preview: {response[:100]}...")
+            # Configure direct API
+            genai.configure(api_key=self.api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content('Hello')
             
+            return {
+                "status": "success",
+                "model": "gemini-1.5-flash",
+                "response_length": len(response.text),
+                "response": response.text[:50] + "..." if len(response.text) > 50 else response.text,
+                "test_successful": True
+            }
         except Exception as e:
-            print(f"  ❌ {provider}/{model} failed: {str(e)}")
-    
-    print(f"\n✨ Open Source LLM integration ready!")
+            return {
+                "status": "error",
+                "error": str(e),
+                "test_successful": False
+            }
+
+# Backward compatibility functions
+def get_gemini_llm(model_name: str = "gemini-1.5-flash", **kwargs):
+    """Get Gemini LLM instance - backward compatibility function"""
+    manager = GeminiLLMManager()
+    return manager.get_llm(model_name, **kwargs)
+
+def get_gemini_embeddings(model_name: str = "models/embedding-001", **kwargs):
+    """Get Gemini embeddings - backward compatibility function"""
+    manager = GeminiLLMManager()
+    return manager.get_embeddings(model_name, **kwargs)
+
+def list_available_models() -> List[str]:
+    """List available models"""
+    try:
+        manager = GeminiLLMManager()
+        return manager.list_available_models()
+    except Exception:
+        return []
+
+# Legacy compatibility
+OpenSourceLLMManager = GeminiLLMManager
+get_open_source_llm = get_gemini_llm  
+get_open_source_embeddings = get_gemini_embeddings

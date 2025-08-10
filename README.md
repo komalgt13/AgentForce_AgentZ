@@ -1,27 +1,19 @@
 # AI Customer Persona Generator
 
-An enterprise-grade, multi-agent AI system that processes customer data to generate actionable customer personas using open source language models.
+An enterprise-grade, multi-agent AI system that processes customer data to generate actionable customer personas using Google's Gemini 2.5-flash AI model.
 
 ## Overview
 
-This system leverages advanced AI and machine learning to transform raw customer data into comprehensive personas with targeted marketing strategies. Built with a modular architecture using 6 specialized AI agents, it provides businesses with deep customer insights without requiring expensive API services.
+This system leverages advanced AI and machine learning to transform raw customer data into comprehensive personas with targeted marketing strategies. Built with a modular architecture using 6 specialized AI agents powered by Gemini 2.5-flash, it provides businesses with high-quality customer insights and marketing strategies.
 
 ## Core Capabilities
 
 - **Automated Data Analysis**: Processes customer surveys, transaction data, and behavioral metrics
-- **Multi-Agent Intelligence**: 6 specialized AI agents collaborate to analyze different aspects of customer behavior
+- **Multi-Agent Intelligence**: 6 specialized AI agents collaborate using Gemini 2.5-flash for deep analysis
 - **Customer Segmentation**: Uses ML clustering to identify distinct customer groups
 - **Persona Generation**: Creates detailed customer profiles with demographics, behaviors, and pain points
 - **Marketing Strategy Development**: Generates targeted campaigns and messaging strategies
 - **Quality Validation**: Ensures consistency and accuracy of generated personas
-
-## Architecture
-
-The system uses a sophisticated multi-agent architecture:
-
-## Architecture
-
-The system uses a sophisticated multi-agent architecture:
 
 ### AI Agents
 1. **Data Analyst Agent**: Statistical analysis and pattern recognition
@@ -32,20 +24,18 @@ The system uses a sophisticated multi-agent architecture:
 6. **Validation Agent**: Quality assurance and result validation
 
 ### Technology Stack
+- **AI Model**: Google Gemini 2.5-flash for superior reasoning and analysis
 - **AI Framework**: LangChain + LangGraph for agent orchestration
-- **Language Models**: Open source LLMs (HuggingFace, Ollama)
 - **Data Processing**: Pandas, NumPy, Scikit-learn
 - **Web Interface**: Streamlit with real-time monitoring
 - **Visualization**: Plotly for analytics and insights
 
 ## Installation
 
-## Installation
-
 ### Prerequisites
 - Python 3.8 or higher
-- 4GB RAM minimum (8GB recommended for larger models)
-- Internet connection for initial model downloads
+- Google API key for Gemini access
+- Internet connection for API calls
 
 ### Setup Instructions
 
@@ -57,20 +47,25 @@ cd AgentForce_AgentZ
 
 2. **Install Dependencies**
 ```bash
+```bash
 pip install -r requirements.txt
 ```
 
-3. **Environment Configuration**
-Copy `.env.example` to `.env` and configure:
+3. **API Key Setup**
+Get your Google API key and configure:
 ```bash
-# HuggingFace Configuration (Recommended for beginners)
-LLM_PROVIDER=huggingface
-LLM_MODEL=microsoft/DialoGPT-small
+# Copy the environment template
+cp .env.example .env
 
-# Ollama Configuration (For advanced users)
-# LLM_PROVIDER=ollama  
-# LLM_MODEL=llama3.2:3b
+# Edit .env file and add your Google API key
+GOOGLE_API_KEY=your_google_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
 ```
+
+4. **Get Google API Key**
+   - Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
+   - Create a new API key
+   - Copy the key to your `.env` file
 
 ## Usage
 
@@ -82,16 +77,20 @@ python demo_enhanced.py
 
 ### Web Interface
 ```bash
-# Launch interactive application
+# Launch interactive Streamlit application
 streamlit run agentic_app.py
+```
+
+### AI-Powered Demo
+```bash
+# AI-powered persona generation (requires API key)
+python demo_working.py
 ```
 
 ### Advanced Usage
 ```bash
-# Full multi-agent system (requires larger models)
+# Full multi-agent system (requires API key)
 python demo_simple.py
-```
-streamlit run agentic_app.py
 ```
 
 ## Data Requirements
@@ -121,8 +120,6 @@ See `Customer-survey-data.csv` for a complete example.
 
 ## Project Structure
 
-## Project Structure
-
 ```
 AgentForce_AgentZ/
 ├── Core System
@@ -131,16 +128,19 @@ AgentForce_AgentZ/
 │   └── requirements.txt               # Python dependencies
 ├── Applications
 │   ├── agentic_app.py                 # Streamlit web interface
-│   ├── demo_working.py                # Simple demonstration script
-│   └── demo_simple.py                 # Full system demonstration
+│   ├── demo_enhanced.py               # Enhanced demo with guaranteed output
+│   ├── demo_working.py                # Simple AI demonstration script
+│   └── demo_simple.py                 # Full agentic system demo
 ├── Configuration
 │   ├── .env.example                   # Configuration template
-│   └── .env                          # Environment settings
-├── Data
-│   └── Customer-survey-data.csv       # Sample dataset
+│   └── .gitignore                     # Git ignore rules
+├── Data & Output
+│   ├── Customer-survey-data.csv       # Sample dataset
+│   ├── enhanced_personas.json         # Demo output
+│   └── persona_results.json           # AI-generated results
 └── Documentation
-    ├── README.md                      # This file
-    └── CLEANUP_SUMMARY.md            # Development notes
+    ├── README.md                      # This comprehensive guide
+    └── OUTPUT_GUIDE.md                # Output storage locations
 ```
 
 ## System Workflow

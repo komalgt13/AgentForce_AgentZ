@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from agentic_persona_generator import AgenticPersonaGenerator
-from open_source_llm import list_available_models
+from open_source_llm import GeminiLLMManager
 import json
 import os
 from datetime import datetime
@@ -277,83 +277,62 @@ def main():
     st.sidebar.header("Open Source LLM Configuration")
     
     # Provider selection
-    provider = st.sidebar.selectbox(
-        "LLM Provider",
-        ["ollama", "huggingface"],
-        help="Choose your open source LLM provider"
-    )
+    # Gemini Model Configuration
+    st.sidebar.header("🚀 Gemini Configuration")
     
-    # Get available models
-    try:
-        available_models = list_available_models()
-        provider_models = available_models.get(provider, [])
-    except:
-        provider_models = []
+    # API Key input
+    google_api_key = st.sidebar.text_input(
+        "Google API Key",
+        type="password",
+        help="Enter your Google API key for Gemini access"
+    )
     
     # Model selection
-    if provider == "ollama":
-        default_models = ["llama3.2:3b", "llama3.2:7b", "mistral:7b", "codellama:7b"]
-        model_options = provider_models if provider_models else default_models
-        default_model = "llama3.2:3b"
-    else:  # huggingface
-        default_models = ["microsoft/DialoGPT-medium", "microsoft/DialoGPT-small", "distilgpt2", "gpt2"]
-        model_options = provider_models if provider_models else default_models
-        default_model = "microsoft/DialoGPT-small"
-    
+    model_options = ["gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
     selected_model = st.sidebar.selectbox(
-        "Model",
+        "Gemini Model",
         model_options,
-        index=0 if default_model not in model_options else model_options.index(default_model),
-        help=f"Choose your {provider} model"
+        index=0,
+        help="Choose your Gemini model"
     )
     
-    # Check model availability
-    model_available = check_llm_availability(provider, selected_model)
-    
-    if model_available:
-        st.sidebar.success(f"✅ {provider}/{selected_model} available")
-        st.session_state.llm_ready = True
-        
-        # Initialize agentic generator
-        if st.session_state.agentic_generator is None:
-            try:
-                with st.sidebar.spinner("Initializing AI agents..."):
-                    st.session_state.agentic_generator = AgenticPersonaGenerator(
-                        model=selected_model,
-                        provider=provider
-                    )
-                st.sidebar.success("🤖 AI Agents Initialized")
-            except Exception as e:
-                st.sidebar.error(f"Error initializing AI: {str(e)}")
+    # Test connection
+    if google_api_key:
+        try:
+            manager = GeminiLLMManager(api_key=google_api_key)
+            test_result = manager.test_connection()
+            if test_result["test_successful"]:
+                st.sidebar.success(f"✅ {selected_model} connected successfully")
+                st.session_state.llm_ready = True
+                
+                # Initialize agentic generator
+                if st.session_state.agentic_generator is None:
+                    try:
+                        with st.sidebar.spinner("Initializing Gemini AI agents..."):
+                            st.session_state.agentic_generator = AgenticPersonaGenerator(
+                                model=selected_model,
+                                api_key=google_api_key
+                            )
+                        st.sidebar.success("🤖 Gemini AI Agents Initialized")
+                    except Exception as e:
+                        st.sidebar.error(f"Error initializing AI: {str(e)}")
+                        st.session_state.llm_ready = False
+            else:
+                st.sidebar.error(f"❌ Connection failed: {test_result.get('error', 'Unknown error')}")
                 st.session_state.llm_ready = False
+        except Exception as e:
+            st.sidebar.error(f"❌ Gemini setup failed: {str(e)}")
+            st.session_state.llm_ready = False
     else:
-        st.sidebar.error(f"❌ {provider}/{selected_model} not available")
+        st.sidebar.warning("⚠️ Please enter your Google API Key")
         st.session_state.llm_ready = False
-        
-        # Show setup instructions
-        if provider == "ollama":
-            st.sidebar.info("""
-            **Setup Ollama:**
-            1. Install Ollama: https://ollama.com
-            2. Run: `ollama pull llama3.2:3b`
-            3. Start Ollama service
-            """)
-        else:
-            st.sidebar.info("""
-            **Setup HuggingFace:**
-            1. Install: `pip install transformers torch`
-            2. Models download automatically
-            """)
     
     # Advanced settings
-    with st.sidebar.expander("⚙️ Advanced Settings"):
+    with st.sidebar.expander("⚙️ Gemini Advanced Settings"):
         temperature = st.slider("Temperature", 0.0, 1.0, 0.3, 0.1)
         max_tokens = st.number_input("Max Tokens", 100, 4096, 2048)
-        
-        if provider == "ollama":
-            base_url = st.text_input("Ollama Base URL", "http://localhost:11434")
-        
-        use_gpu = st.checkbox("Use GPU (if available)", value=True)
+    
+    st.sidebar.markdown("---")
     
     # Data Upload
     uploaded_file = st.sidebar.file_uploader(

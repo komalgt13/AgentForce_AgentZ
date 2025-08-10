@@ -8,7 +8,7 @@ import os
 import json
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional, TypedDict, Annotated
+from typing import Dict, List, Any, Optional, TypedDict
 from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
@@ -16,30 +16,15 @@ warnings.filterwarnings('ignore')
 # LangChain imports
 from langchain.agents import initialize_agent, AgentType
 from langchain.tools import Tool
-from langchain.schema import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain.schema import BaseMessage, HumanMessage, AIMessage
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import RetrievalQA
 
-# Open Source LLM integration
-from open_source_llm import OpenSourceLLMManager, get_open_source_llm, get_open_source_embeddings
+# Gemini LLM integration
+from open_source_llm import GeminiLLMManager
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
-try:
-    from langgraph.prebuilt import ToolExecutor, ToolInvocation
-except ImportError:
-    # Fallback for newer versions
-    from langgraph.prebuilt.tool_node import ToolNode as ToolExecutor
-    ToolInvocation = dict  # Use dict as fallback
 from langgraph.checkpoint.memory import MemorySaver
-
-# Pydantic for data models
-from pydantic import BaseModel, Field
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -53,66 +38,45 @@ class PersonaState(TypedDict):
     clustering_results: Dict[str, Any]
     personas: Dict[str, Any]
     marketing_strategies: Dict[str, Any]
-    messages: Annotated[List[BaseMessage], "Messages in the conversation"]
+    messages: List[BaseMessage]
     next_step: str
     errors: List[str]
     metadata: Dict[str, Any]
 
-class CustomerInsight(BaseModel):
-    """Data model for customer insights"""
-    insight_type: str = Field(description="Type of insight (demographic, behavioral, satisfaction)")
-    description: str = Field(description="Detailed description of the insight")
-    supporting_data: Dict[str, Any] = Field(description="Supporting statistical data")
-    confidence_score: float = Field(description="Confidence in this insight (0-1)")
-
-class PersonaProfile(BaseModel):
-    """Data model for a customer persona"""
-    name: str = Field(description="Persona name")
-    description: str = Field(description="Brief description")
-    demographics: Dict[str, str] = Field(description="Demographic information")
-    psychographics: Dict[str, Any] = Field(description="Psychological characteristics")
-    behavior_patterns: List[str] = Field(description="Behavioral patterns")
-    pain_points: List[str] = Field(description="Main frustrations and problems")
-    goals_motivations: List[str] = Field(description="Goals and motivations")
-    preferred_channels: List[str] = Field(description="Preferred communication channels")
-    messaging_strategy: Dict[str, Any] = Field(description="Messaging recommendations")
-    campaign_ideas: List[Dict[str, Any]] = Field(description="Marketing campaign suggestions")
-    size_percentage: float = Field(description="Percentage of total customer base")
 
 class AgenticPersonaGenerator:
     """
     Main class for the agentic AI persona generation system using open source LLMs
     """
     
-    def __init__(self, model: str = None, provider: str = None, **kwargs):
-        """Initialize the agentic system with open source LLM"""
+    def __init__(self, model: str = None, api_key: str = None, **kwargs):
+        """Initialize the agentic system with Gemini LLM"""
         
-        # Initialize LLM manager
-        self.llm_manager = OpenSourceLLMManager()
+        # Initialize Gemini LLM manager
+        self.llm_manager = GeminiLLMManager(api_key=api_key)
         
         # Get model configuration from environment or parameters
-        self.model = model or os.getenv("LLM_MODEL", "llama3.2:3b")
-        self.provider = provider or os.getenv("LLM_PROVIDER", "ollama")
+        self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         
-        # Initialize LLM and embeddings
+        # Initialize LLM and embeddings (use LangChain-compatible wrapper)
         try:
+            # Use LangChain-compatible wrapper that falls back to DirectGeminiWrapper
             self.llm = self.llm_manager.get_llm(
                 model_name=self.model,
-                provider=self.provider,
                 temperature=kwargs.get('temperature', 0.3),
-                max_tokens=kwargs.get('max_tokens', 2048)
+                max_tokens=kwargs.get('max_tokens', 2048),
+                use_langchain=True  # This will try ChatGoogleGenerativeAI, then fallback to compatible wrapper
             )
             
             self.embeddings = self.llm_manager.get_embeddings(
-                model_name=kwargs.get('embedding_model'),
-                provider=kwargs.get('embedding_provider')
+                model_name=kwargs.get('embedding_model', "models/embedding-001")
             )
             
-            print(f"SUCCESS: Initialized with {self.provider}/{self.model}")
+            print(f"SUCCESS: Initialized with Gemini/{self.model} using LangChain-compatible wrapper")
             
         except Exception as e:
-            print(f"ERROR: LLM initialization failed: {str(e)}")
-            print("INFO: Make sure Ollama is running or HuggingFace models are available")
+            print(f"ERROR: Gemini LLM initialization failed: {str(e)}")
+            print("INFO: Make sure GOOGLE_API_KEY is set in your environment")
             raise
         
         self.memory = MemorySaver()
@@ -163,24 +127,41 @@ class AgenticPersonaGenerator:
     def _create_agent(self, role: str, goal: str, backstory: str, tools: List[Tool]):
         """Create a specialized agent with specific role and tools"""
         system_prompt = f"""
+        ## AGENT ROLE AND IDENTITY
         Role: {role}
-        Goal: {goal}
-        Backstory: {backstory}
+        Primary Objective: {goal}
+        Professional Background: {backstory}
         
-        You are part of a collaborative AI system generating customer personas. Work with other agents to:
-        1. Provide your specialized expertise
-        2. Build on insights from other agents
-        3. Ensure the final personas are comprehensive and actionable
+        ## COLLABORATION FRAMEWORK
+        You are an expert agent within a multi-agent customer persona generation system. Your responsibilities:
         
-        Always provide specific, data-driven recommendations based on your analysis.
+        ### Core Duties:
+        1. **Domain Expertise**: Apply your specialized knowledge to analyze customer data
+        2. **Collaborative Intelligence**: Integrate insights from other agents to enhance analysis
+        3. **Quality Assurance**: Ensure outputs are comprehensive, actionable, and business-ready
+        4. **Data-Driven Insights**: Base all recommendations on quantifiable evidence and patterns
+        
+        ### Output Requirements:
+        - Provide concrete, measurable insights with supporting data points
+        - Use professional business language appropriate for executive presentations
+        - Structure responses with clear headers and bullet points
+        - Include confidence levels and data limitations where relevant
+        - Suggest actionable next steps for implementation
+        
+        ### Communication Protocol:
+        - Begin responses with your agent role for clarity
+        - Reference specific data points and metrics
+        - Highlight key findings and their business implications
+        - End with concrete recommendations
         """
         
         return initialize_agent(
             tools=tools,
             llm=self.llm,
-            agent=AgentType.OPENAI_FUNCTIONS,
+            agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,  # Use simpler agent type
             verbose=True,
-            system_message=system_prompt
+            max_iterations=3,  # Limit iterations to prevent issues
+            early_stopping_method="generate"  # Stop on first generation
         )
     
     def _get_data_analysis_tools(self) -> List[Tool]:
@@ -334,28 +315,214 @@ class AgenticPersonaGenerator:
         final_state = self.workflow.invoke(initial_state, config=config)
         
         return {
-            "personas": final_state["personas"],
+            "detailed_personas": final_state["personas"],
             "marketing_strategies": final_state["marketing_strategies"],
             "insights": final_state["data_insights"],
             "metadata": final_state["metadata"],
             "errors": final_state["errors"]
         }
     
+    def generate_personas_from_csv(self, csv_file_path: str, n_personas: int = 4) -> Dict[str, Any]:
+        """
+        Generate personas from CSV file path using direct agent execution
+        """
+        try:
+            # Load the CSV data
+            data = pd.read_csv(csv_file_path)
+            print(f"✅ Loaded {len(data)} customer records from {csv_file_path}")
+            
+            # Execute the pipeline directly without LangGraph serialization
+            print("🤖 Running Data Analysis Agent...")
+            data_analysis = self._run_data_analysis_directly(data)
+            
+            print("🤖 Running Psychology Analysis Agent...")
+            psychology_analysis = self._run_psychology_analysis_directly(data, data_analysis)
+            
+            print("🤖 Running Clustering Agent...")
+            clustering_results = self._perform_intelligent_clustering(data, n_personas)
+            
+            print("🤖 Running Persona Creation Agent...")
+            personas = self._run_persona_creation_directly(data_analysis, psychology_analysis, clustering_results)
+            
+            print("🤖 Running Marketing Strategy Agent...")
+            marketing_strategies = self._run_marketing_strategy_directly(personas)
+            
+            print("🤖 Running Validation Agent...")
+            validation_results = self._run_validation_directly(personas, marketing_strategies)
+            
+            return {
+                "detailed_personas": personas,
+                "marketing_strategies": marketing_strategies,
+                "insights": {
+                    "data_analysis": data_analysis,
+                    "psychology": psychology_analysis,
+                    "clustering": clustering_results
+                },
+                "metadata": {
+                    "n_personas": n_personas,
+                    "timestamp": datetime.now().isoformat(),
+                    "data_shape": [len(data), len(data.columns)],
+                    "csv_file": csv_file_path,
+                    "validation": validation_results
+                },
+                "errors": []
+            }
+            
+        except Exception as e:
+            error_msg = f"Pipeline failed: {str(e)}"
+            print(f"❌ Error in agentic pipeline: {error_msg}")
+            return {
+                "detailed_personas": {},
+                "marketing_strategies": {},
+                "insights": {},
+                "metadata": {"error": error_msg},
+                "errors": [error_msg]
+            }
+    
+    def _run_data_analysis_directly(self, data: pd.DataFrame) -> str:
+        """Run data analysis agent directly"""
+        insights_prompt = f"""
+        ## DATA ANALYSIS REQUEST
+        
+        **Objective**: Conduct comprehensive customer data analysis for persona generation
+        
+        **Dataset Overview**:
+        - Records: {len(data):,} customers
+        - Attributes: {len(data.columns)} data points
+        - Features: {', '.join(list(data.columns))}
+        
+        **Statistical Summary**:
+        {data.describe().to_string()}
+        
+        **Required Analysis**: Provide key insights about customer segments, satisfaction patterns, 
+        and behavioral indicators that will inform persona development.
+        """
+        
+        return self.data_analyst.run(insights_prompt)
+    
+    def _run_psychology_analysis_directly(self, data: pd.DataFrame, data_analysis: str) -> str:
+        """Run psychology analysis agent directly"""
+        psychology_prompt = f"""
+        ## CUSTOMER PSYCHOLOGY ANALYSIS REQUEST
+        
+        **Data Foundation**: {data_analysis}
+        
+        **Required Assessment**: Develop psychological profiles for customer segments based on the data patterns.
+        Focus on motivations, emotional drivers, pain points, and personality traits.
+        """
+        
+        return self.psychologist.run(psychology_prompt)
+    
+    def _run_persona_creation_directly(self, data_analysis: str, psychology_analysis: str, clustering_results: Dict) -> Dict:
+        """Run persona creation agent directly"""
+        persona_prompt = f"""
+        ## CUSTOMER PERSONA CREATION REQUEST
+        
+        **Data Analytics**: {data_analysis}
+        **Psychology Insights**: {psychology_analysis}
+        **Segmentation**: {json.dumps(clustering_results, indent=2)}
+        
+        **Task**: Create {len(clustering_results.get('cluster_sizes', {}))} comprehensive customer personas 
+        with demographics, behaviors, pain points, and opportunities.
+        """
+        
+        personas_text = self.persona_creator.run(persona_prompt)
+        
+        # Parse into structured format
+        personas = {}
+        for i, (cluster_id, size) in enumerate(clustering_results.get('cluster_sizes', {}).items()):
+            total = sum(clustering_results['cluster_sizes'].values())
+            personas[f"persona_{i+1}"] = {
+                "name": f"Customer Segment {i+1}",
+                "cluster_id": cluster_id,
+                "size_percentage": (size / total) * 100,
+                "description": personas_text,
+                "characteristics": clustering_results['cluster_characteristics'].get(cluster_id, {})
+            }
+        
+        return personas
+    
+    def _run_marketing_strategy_directly(self, personas: Dict) -> Dict:
+        """Run marketing strategy agent directly"""
+        strategy_prompt = f"""
+        ## MARKETING STRATEGY DEVELOPMENT REQUEST
+        
+        **Target Personas**: {json.dumps(personas, indent=2)}
+        
+        **Task**: Create comprehensive marketing strategies for each persona including 
+        channels, messaging, campaigns, and success metrics.
+        """
+        
+        strategies_text = self.marketer.run(strategy_prompt)
+        
+        return {
+            "comprehensive_strategies": strategies_text,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    def _run_validation_directly(self, personas: Dict, marketing_strategies: Dict) -> str:
+        """Run validation agent directly"""
+        validation_prompt = f"""
+        ## VALIDATION REQUEST
+        
+        **Personas**: {json.dumps(personas, indent=2)}
+        **Strategies**: {json.dumps(marketing_strategies, indent=2)}
+        
+        **Task**: Validate the quality and consistency of personas and marketing strategies.
+        """
+        
+        return self.persona_creator.run(validation_prompt)
+    
     # Workflow nodes
     def _data_analysis_node(self, state: PersonaState) -> PersonaState:
         """Data analysis workflow node"""
         try:
+            # Convert serialized data back to DataFrame for processing
+            if isinstance(state["raw_data"], dict):
+                raw_data = pd.DataFrame(state["raw_data"]["data"])
+            else:
+                raw_data = state["raw_data"]
+            
             # Process the raw data
-            processed_data = self._preprocess_data(state["raw_data"])
+            processed_data = self._preprocess_data(raw_data)
             
             # Generate insights using the data analyst agent
             insights_prompt = f"""
-            Analyze this customer data and provide key insights:
-            - Data shape: {state["raw_data"].shape}
-            - Columns: {list(state["raw_data"].columns)}
-            - Sample statistics: {state["raw_data"].describe().to_string()}
+            ## DATA ANALYSIS REQUEST
             
-            Focus on satisfaction patterns, customer segments, and behavioral indicators.
+            **Objective**: Conduct comprehensive customer data analysis for persona generation
+            
+            **Dataset Overview**:
+            - Records: {raw_data.shape[0]:,} customers
+            - Attributes: {raw_data.shape[1]} data points
+            - Features: {', '.join(list(raw_data.columns))}
+            
+            **Statistical Summary**:
+            {raw_data.describe().to_string()}
+            
+            **Required Analysis**:
+            
+            ### 1. Customer Satisfaction Patterns
+            - Identify satisfaction distribution and key drivers
+            - Correlate satisfaction with other customer attributes
+            - Flag any concerning satisfaction trends
+            
+            ### 2. Customer Segmentation Indicators
+            - Detect natural groupings based on behavior and demographics
+            - Calculate segment sizes and characteristics
+            - Identify high-value customer segments
+            
+            ### 3. Behavioral Insights
+            - Purchase frequency patterns and their implications
+            - Spending behavior analysis across different customer groups
+            - Age and location influences on customer behavior
+            
+            **Deliverable Format**:
+            Provide findings in structured sections with:
+            - Key metrics and percentages
+            - Business implications for each finding
+            - Recommendations for persona development
+            - Data quality notes and limitations
             """
             
             insights = self.data_analyst.run(insights_prompt)
@@ -365,7 +532,9 @@ class AgenticPersonaGenerator:
             state["messages"].append(AIMessage(content=f"Data analysis completed: {insights}"))
             
         except Exception as e:
-            state["errors"].append(f"Data analysis error: {str(e)}")
+            error_msg = f"Data analysis error: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
         
         return state
     
@@ -373,17 +542,40 @@ class AgenticPersonaGenerator:
         """Psychology analysis workflow node"""
         try:
             psychology_prompt = f"""
-            Based on the data analysis insights, identify customer psychology patterns:
+            ## CUSTOMER PSYCHOLOGY ANALYSIS REQUEST
             
-            Data insights: {state['data_insights']['analysis']}
+            **Objective**: Develop psychological profiles for customer segments based on data analysis
             
-            Analyze:
-            1. Behavioral patterns and motivations
-            2. Emotional drivers and triggers
-            3. Pain points and frustrations
-            4. Personality traits indicated by the data
+            **Data Analysis Foundation**:
+            {state['data_insights']['analysis']}
             
-            Provide psychological profiles for different customer segments.
+            **Required Psychological Assessment**:
+            
+            ### 1. Behavioral Pattern Analysis
+            - **Purchase Motivations**: What drives customers to buy (necessity, desire, social pressure, etc.)?
+            - **Decision-Making Styles**: Quick impulse buyers vs. deliberate researchers
+            - **Brand Relationship**: Loyalty patterns and switching triggers
+            
+            ### 2. Emotional Driver Identification
+            - **Primary Emotions**: Fear, joy, security, status, convenience motivating purchases
+            - **Emotional Triggers**: Specific situations or feelings that prompt buying behavior
+            - **Satisfaction Sources**: What creates positive emotional responses post-purchase
+            
+            ### 3. Pain Point Psychology
+            - **Frustration Sources**: Specific customer journey friction points
+            - **Anxiety Factors**: Concerns about price, quality, time, or social perception
+            - **Unmet Needs**: Gaps between expectations and current market offerings
+            
+            ### 4. Personality Trait Mapping
+            - **Risk Tolerance**: Conservative vs. adventurous in purchase decisions
+            - **Social Influence**: Individual vs. community-driven purchasing
+            - **Communication Preferences**: Direct/informational vs. emotional/story-driven messaging
+            
+            **Deliverable Requirements**:
+            - Create distinct psychological profiles for each customer segment
+            - Link psychological traits to observable data patterns
+            - Provide confidence levels for psychological assessments
+            - Include implications for marketing message development
             """
             
             psychology_analysis = self.psychologist.run(psychology_prompt)
@@ -399,9 +591,15 @@ class AgenticPersonaGenerator:
     def _clustering_node(self, state: PersonaState) -> PersonaState:
         """Clustering workflow node"""
         try:
+            # Convert serialized data back to DataFrame
+            if isinstance(state["raw_data"], dict):
+                raw_data = pd.DataFrame(state["raw_data"]["data"])
+            else:
+                raw_data = state["raw_data"]
+            
             # Perform clustering on the processed data
             clustering_results = self._perform_intelligent_clustering(
-                state["raw_data"], 
+                raw_data, 
                 state["metadata"]["n_personas"]
             )
             
@@ -409,7 +607,9 @@ class AgenticPersonaGenerator:
             state["messages"].append(AIMessage(content="Customer segmentation clustering completed"))
             
         except Exception as e:
-            state["errors"].append(f"Clustering error: {str(e)}")
+            error_msg = f"Clustering error: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
         
         return state
     
@@ -417,22 +617,60 @@ class AgenticPersonaGenerator:
         """Persona creation workflow node"""
         try:
             persona_prompt = f"""
-            Create detailed customer personas based on:
+            ## CUSTOMER PERSONA CREATION REQUEST
             
-            Data Insights: {state['data_insights']['analysis']}
-            Psychology Analysis: {state['data_insights']['psychology']}
-            Clustering Results: {state['clustering_results']}
+            **Objective**: Develop {state['metadata']['n_personas']} comprehensive, actionable customer personas
             
-            Create {state['metadata']['n_personas']} distinct personas, each with:
-            1. Name and description
-            2. Demographics
-            3. Psychographics
-            4. Behavior patterns
-            5. Pain points
-            6. Goals and motivations
-            7. Size percentage
+            **Source Intelligence**:
             
-            Make each persona vivid and actionable for marketing teams.
+            ### Data Analytics Foundation:
+            {state['data_insights']['analysis']}
+            
+            ### Psychological Insights:
+            {state['data_insights']['psychology']}
+            
+            ### Segmentation Results:
+            {state['clustering_results']}
+            
+            **Persona Development Requirements**:
+            
+            For each of the {state['metadata']['n_personas']} personas, provide:
+            
+            ### 1. Identity & Demographics
+            - **Persona Name**: Memorable, representative name
+            - **Age Range**: Specific age brackets with median
+            - **Geographic Distribution**: Primary locations and preferences
+            - **Income Level**: Annual income ranges and spending capacity
+            - **Education & Occupation**: Professional background and expertise levels
+            
+            ### 2. Psychographic Profile
+            - **Core Values**: What matters most to this segment
+            - **Lifestyle Choices**: Daily routines, hobbies, interests
+            - **Technology Adoption**: Digital comfort level and platform preferences
+            - **Social Dynamics**: Family status, social network influence
+            
+            ### 3. Behavioral Patterns
+            - **Purchase Journey**: How they research, evaluate, and buy
+            - **Brand Interactions**: Preferred touchpoints and communication frequency
+            - **Decision Factors**: Primary criteria influencing purchase decisions
+            - **Loyalty Drivers**: What keeps them engaged long-term
+            
+            ### 4. Challenges & Opportunities
+            - **Primary Pain Points**: Specific frustrations with current market options
+            - **Unmet Needs**: Gaps between desires and available solutions
+            - **Success Metrics**: How they define value and satisfaction
+            - **Growth Potential**: Opportunities for increased engagement
+            
+            ### 5. Segment Metrics
+            - **Market Share**: Percentage of total customer base
+            - **Revenue Contribution**: Average annual value and lifetime value
+            - **Engagement Level**: Interaction frequency and depth
+            
+            **Quality Standards**:
+            - Each persona must be distinct and non-overlapping
+            - Include specific, quantifiable characteristics where possible
+            - Ensure personas are actionable for marketing, product, and sales teams
+            - Provide realistic, human-centered descriptions that teams can visualize
             """
             
             personas_text = self.persona_creator.run(persona_prompt)
@@ -452,18 +690,59 @@ class AgenticPersonaGenerator:
         """Marketing strategy workflow node"""
         try:
             marketing_prompt = f"""
-            Create comprehensive marketing strategies for these personas:
+            ## MARKETING STRATEGY DEVELOPMENT REQUEST
             
-            Personas: {json.dumps(state['personas'], indent=2)}
+            **Objective**: Create comprehensive, executable marketing strategies for each customer persona
             
-            For each persona, provide:
-            1. Messaging strategy and tone
-            2. Preferred communication channels
-            3. Content strategy recommendations
-            4. Campaign concepts with specific tactics
-            5. Key performance indicators (KPIs)
+            **Target Personas**:
+            {json.dumps(state['personas'], indent=2)}
             
-            Focus on actionable, specific recommendations.
+            **Strategy Development Framework**:
+            
+            For each persona, develop a complete marketing approach covering:
+            
+            ### 1. Brand Positioning & Messaging
+            - **Core Value Proposition**: Primary benefit statement for this persona
+            - **Messaging Hierarchy**: Primary, secondary, and supporting messages
+            - **Tone & Voice**: Communication style that resonates with this segment
+            - **Unique Selling Points**: Specific advantages that appeal to this persona
+            
+            ### 2. Channel Strategy
+            - **Primary Channels**: Top 2-3 most effective marketing channels
+            - **Secondary Channels**: Supporting touchpoints for reinforcement
+            - **Channel Mix Rationale**: Why these channels work for this persona
+            - **Budget Allocation**: Recommended spend distribution across channels
+            
+            ### 3. Content Strategy
+            - **Content Types**: Formats that engage this persona (video, articles, infographics, etc.)
+            - **Content Themes**: Topic areas that capture attention and drive engagement
+            - **Content Calendar**: Optimal timing and frequency for content delivery
+            - **Personalization Level**: Degree of customization needed for effectiveness
+            
+            ### 4. Campaign Concepts
+            - **Acquisition Campaigns**: Strategies to attract new customers from this segment
+            - **Retention Campaigns**: Approaches to maintain engagement and loyalty
+            - **Upsell/Cross-sell**: Opportunities to increase customer value
+            - **Seasonal/Event-based**: Time-sensitive campaign opportunities
+            
+            ### 5. Performance Measurement
+            - **Primary KPIs**: Key metrics to track campaign success
+            - **Secondary Metrics**: Supporting indicators of performance
+            - **Success Benchmarks**: Realistic targets for each metric
+            - **Optimization Triggers**: Signals to adjust or pivot strategy
+            
+            ### 6. Implementation Roadmap
+            - **Phase 1 (0-3 months)**: Immediate launch activities
+            - **Phase 2 (3-6 months)**: Optimization and scaling activities
+            - **Phase 3 (6-12 months)**: Advanced tactics and expansion
+            - **Resource Requirements**: Team, budget, and technology needs
+            
+            **Deliverable Standards**:
+            - Strategies must be specific and actionable
+            - Include realistic budget estimates and timelines
+            - Provide clear success criteria and measurement plans
+            - Ensure strategies are differentiated between personas
+            - Include risk factors and mitigation approaches
             """
             
             marketing_strategies = self.marketer.run(marketing_prompt)
@@ -480,19 +759,74 @@ class AgenticPersonaGenerator:
         """Validation workflow node"""
         try:
             validation_prompt = f"""
-            Validate the consistency and quality of these personas and marketing strategies:
+            ## PERSONA AND STRATEGY VALIDATION REQUEST
             
-            Personas: {json.dumps(state['personas'], indent=2)}
-            Marketing Strategies: {json.dumps(state['marketing_strategies'], indent=2)}
+            **Objective**: Conduct comprehensive quality assurance on personas and marketing strategies
             
-            Check for:
-            1. Internal consistency within each persona
-            2. Distinctiveness between personas
-            3. Alignment between personas and marketing strategies
-            4. Actionability of recommendations
-            5. Data support for claims
+            **Materials for Review**:
             
-            Provide a quality score and any recommended improvements.
+            ### Customer Personas:
+            {json.dumps(state['personas'], indent=2)}
+            
+            ### Marketing Strategies:
+            {json.dumps(state['marketing_strategies'], indent=2)}
+            
+            **Validation Framework**:
+            
+            ### 1. Internal Consistency Analysis
+            - **Persona Coherence**: Do demographic, psychographic, and behavioral elements align logically?
+            - **Data Alignment**: Are persona characteristics supported by the underlying data?
+            - **Realistic Representation**: Do personas represent believable, real-world customer archetypes?
+            - **Completeness Check**: Are all required persona elements present and well-developed?
+            
+            ### 2. Differentiation Assessment
+            - **Segment Distinctiveness**: Are personas sufficiently different from each other?
+            - **Overlap Analysis**: Identify any problematic similarities between personas
+            - **Market Coverage**: Do personas collectively represent the full customer spectrum?
+            - **Actionability Gap**: Are differences meaningful for marketing execution?
+            
+            ### 3. Strategy-Persona Alignment
+            - **Targeting Accuracy**: Do marketing strategies appropriately match persona characteristics?
+            - **Channel-Persona Fit**: Are recommended channels aligned with persona preferences?
+            - **Message-Motivation Match**: Do messaging strategies address persona pain points and motivations?
+            - **Tactical Relevance**: Are specific tactics appropriate for each persona's behavior patterns?
+            
+            ### 4. Business Viability Review
+            - **Implementation Feasibility**: Can recommended strategies be realistically executed?
+            - **Resource Requirements**: Are budget and resource estimates reasonable?
+            - **ROI Potential**: Do strategies have clear paths to measurable business impact?
+            - **Risk Assessment**: Are potential challenges and mitigation strategies identified?
+            
+            ### 5. Data Foundation Strength
+            - **Statistical Support**: Are claims backed by sufficient data evidence?
+            - **Assumption Identification**: Which elements rely on reasonable assumptions vs. hard data?
+            - **Confidence Levels**: How reliable are different aspects of the personas?
+            - **Data Gaps**: What additional information would strengthen the personas?
+            
+            **Validation Deliverables**:
+            
+            ### Overall Quality Score: 
+            Rate 1-10 with detailed justification
+            
+            ### Critical Issues (if any):
+            - Issue description
+            - Business impact
+            - Recommended resolution
+            
+            ### Enhancement Opportunities:
+            - Specific improvement suggestions
+            - Priority level (High/Medium/Low)
+            - Implementation approach
+            
+            ### Data Reliability Assessment:
+            - High-confidence elements
+            - Medium-confidence elements  
+            - Low-confidence elements requiring validation
+            
+            ### Implementation Readiness:
+            - Ready-to-execute strategies
+            - Strategies requiring additional development
+            - Prerequisites for successful implementation
             """
             
             validation_results = self.persona_creator.run(validation_prompt)
