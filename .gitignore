@@ -48,6 +48,25 @@ coverage.xml
 *.cover
 *.py.cover
 .hypothesis/
+
+# Customer Persona Generator specific
+*.json
+!sample_*.json
+.env
+.streamlit/
+personas_export/
+temp_data/
+
+# Data files (add specific patterns as needed)
+*.csv
+!Customer-survey-data.csv
+*.xlsx
+*.xls
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
 .pytest_cache/
 cover/
 
